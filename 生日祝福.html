@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+  <title>生日快乐</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, PingFangSC, "Microsoft YaHei", sans-serif; }
+    #app { position: relative; width: 100vw; height: 100vh; }
+    #canvas-container { position: absolute; inset: 0; }
+    
+    .barrage { position: fixed; inset: 0; pointer-events: none; z-index: 9; }
+    .barrage-item { position: fixed; left: 100vw; white-space: nowrap; font-weight: 700; text-shadow: 0 0 8px rgba(255,255,255,0.35), 0 0 16px rgba(255,255,255,0.2); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.35)); animation-name: fly; animation-timing-function: linear; animation-fill-mode: forwards; }
+    @keyframes fly { 0% { transform: translateX(0); } 100% { transform: translateX(-120vw); } }
+    .fullscreen-btn { position: fixed; right: 14px; bottom: 14px; z-index: 11; padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.25); background: rgba(255,255,255,0.12); color: #fff; font-weight: 600; letter-spacing: 0.5px; backdrop-filter: blur(4px); cursor: pointer; }
+    .fullscreen-btn:hover { background: rgba(255,255,255,0.18); }
+    @media (max-width: 768px) { .fullscreen-btn { padding: 9px 12px; right: 10px; bottom: 10px; font-size: 13px; } }
+    @media (max-width: 768px) { .barrage-item { font-size: clamp(14px, 3.5vw, 20px); } }
+    @media (min-width: 769px) { .barrage-item { font-size: clamp(16px, 2.1vw, 28px); } }
+    
+    /* 隐藏音频控件 */
+    audio {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <!-- 背景音乐 -->
+  <audio id="bgMusic" autoplay loop>
+    <source src="/心做dj.m4a" type="audio/mp4">
+  </audio>
+  
+  <div id="app"></div>
+  <script type="module">
+    import { createApp, ref, onMounted, h } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.js';
+    import * as THREE from 'https://unpkg.com/three@0.164.1/build/three.module.js';
+
+    const App = {
+      setup() {
+        const isFs = ref(false);
+        const barrageItems = ref([]);
+        const containerEl = ref(null);
+
+        let renderer, scene, camera, group;
+        let pointsLeaves, pointsOrnaments, pointsStar, pointsAccents;
+        let snowGroup, snowSprites, snowVel, snowRot, snowScale, snowOpacityPhase;
+        let startTime = 0;
+        const disperseDuration = 3500;
+        const morphDuration = 3000;
+        const particleCountLeaves = 5400;
+        const particleCountOrnaments = 400;
+        const particleCountStar = 320;
+        const particleCountAccents = 160;
+        const snowCount = 200;
+        const baseRadius = 6.2;
+        let running = true;
+        const topY = 8.7; // 蛋糕顶部高度
+        const bottomY = -1.4;
+
+        // 生日祝福词
+        const messages = [
+          '生日快乐', '天天开心', '心想事成', '万事如意', '青春永驻', '笑口常开',
+          '幸福美满', '健康长寿', '事业有成', '阖家欢乐', '好运连连', '梦想成真'
+        ];
+
+        function randomHsl() {
+          const h = Math.floor(Math.random() * 360);
+          const s = 68 + Math.random() * 22;
+          const l = 50 + Math.random() * 10;
+          return `hsl(${h}deg, ${s}%, ${l}%)`;
+        }
+
+        function createSnowflakeTexture() {
+          const c = document.createElement('canvas');
+          c.width = 128; c.height = 128;
+          const ctx = c.getContext('2d');
+          ctx.clearRect(0, 0, 128, 128);
+          ctx.translate(64, 64);
+          ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+          ctx.lineWidth = 2;
+          for (let i = 0; i < 6; i++) {
+            const ang = (Math.PI * 2 / 6) * i;
+            const x = Math.cos(ang) * 48;
+            const y = Math.sin(ang) * 48;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+            for (let b = 1; b <= 3; b++) {
+              const t = b / 4;
+              const bx = Math.cos(ang) * 48 * t;
+              const by = Math.sin(ang) * 48 * t;
+              const sideAng = ang + Math.PI / 2;
+              const len = 10 * (1 - t);
+              ctx.beginPath();
+              ctx.moveTo(bx, by);
+              ctx.lineTo(bx + Math.cos(sideAng) * len, by + Math.sin(sideAng) * len);
+              ctx.stroke();
+              ctx.beginPath();
+              ctx.moveTo(bx, by);
+              ctx.lineTo(bx - Math.cos(sideAng) * len, by - Math.sin(sideAng) * len);
+              ctx.stroke();
+            }
+          }
+          const tex = new THREE.CanvasTexture(c);
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          tex.needsUpdate = true;
+          return tex;
+        }
+
+        function createSnowGlowTexture() {
+          const c = document.createElement('canvas');
+          c.width = 128; c.height = 128;
+          const ctx = c.getContext('2d');
+          const grd = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+          grd.addColorStop(0, 'rgba(255,255,255,0.57)');
+          grd.addColorStop(0.4, 'rgba(255,255,255,0.23)');
+          grd.addColorStop(1, 'rgba(255,255,255,0.0)');
+          ctx.fillStyle = grd;
+          ctx.fillRect(0, 0, 128, 128);
+          const tex = new THREE.CanvasTexture(c);
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          tex.needsUpdate = true;
+          return tex;
+        }
+
+        function spawnBarrage() {
+          const count = 2 + Math.floor(Math.random() * 3);
+          const now = Date.now();
+          for (let i = 0; i < count; i++) {
+            const text = messages[Math.floor(Math.random() * messages.length)];
+            const top = Math.random() * 90 + 5;
+            const duration = 10 + Math.random() * 8;
+            const color = randomHsl();
+            const id = `${now}-${i}-${Math.random().toString(36).slice(2,7)}`;
+            barrageItems.value.push({ id, text, top: `${top}%`, duration: `${duration}s`, color, shadow: color });
+            setTimeout(() => {
+              const idx = barrageItems.value.findIndex(x => x.id === id);
+              if (idx >= 0) barrageItems.value.splice(idx, 1);
+            }, duration * 1000 + 400);
+          }
+        }
+
+        function toggleFs() { 
+          if (document.fullscreenElement) document.exitFullscreen();
+          else document.documentElement.requestFullscreen();
+        }
+
+        // 蛋糕层位置计算
+        function computeLeafTargets(count) {
+          const arr = new Float32Array(count * 3);
+          const layers = 3;
+          const layerHeight = 2.5;
+          const gap = 0.5;
+          
+          for (let i = 0; i < count; i++) {
+            const layer = Math.floor(Math.random() * layers);
+            const yBase = layer * (layerHeight + gap);
+            const y = yBase + (Math.random() * layerHeight);
+            const t = layer / (layers - 1);
+            const radius = baseRadius * (1 - t * 0.3);
+            const wobble = 0.2 * Math.sin(8 * t + Math.random());
+            const r = Math.max(0.5, radius + wobble);
+            const a = Math.random() * Math.PI * 2;
+            arr[i*3] = r * Math.cos(a);
+            arr[i*3+1] = y;
+            arr[i*3+2] = r * Math.sin(a);
+          }
+          return arr;
+        }
+
+        // 蛋糕装饰位置计算
+        function computeOrnamentTargets(count) {
+          const arr = new Float32Array(count * 3);
+          const layers = 3;
+          const layerHeight = 2.5;
+          const gap = 0.5;
+          
+          for (let i = 0; i < count; i++) {
+            const layer = Math.floor(Math.random() * layers);
+            const yBase = layer * (layerHeight + gap) + 0.5;
+            const y = yBase + (Math.random() * 1.5);
+            const t = layer / (layers - 1);
+            const radius = baseRadius * (1 - t * 0.3) - 0.3;
+            const wobble = 0.3 * Math.sin(8 * t + Math.random());
+            const r = Math.max(0.5, radius + wobble);
+            const a = Math.random() * Math.PI * 2;
+            arr[i*3] = r * Math.cos(a);
+            arr[i*3+1] = y;
+            arr[i*3+2] = r * Math.sin(a);
+          }
+          return arr;
+        }
+
+        // 蜡烛位置计算
+        function computeStarTargets(count) {
+          const arr = new Float32Array(count * 3);
+          const layers = 3;
+          const layerHeight = 2.5;
+          const gap = 0.5;
+          const candlesPerLayer = [3, 4, 5];
+          let index = 0;
+          
+          for (let layer = 0; layer < layers; layer++) {
+            const yBase = layer * (layerHeight + gap) + 0.2;
+            const radius = baseRadius * (1 - layer * 0.3) - 0.3;
+            const candleCount = candlesPerLayer[layer];
+            
+            for (let c = 0; c < candleCount; c++) {
+              if (index >= count) break;
+              const a = (c / candleCount) * Math.PI * 2;
+              arr[index*3] = radius * Math.cos(a);
+              arr[index*3+1] = yBase;
+              arr[index*3+2] = radius * Math.sin(a);
+              index++;
+            }
+          }
+          return arr;
+        }
+
+        // 糖霜位置计算
+        function computeAccentsTargets(count) {
+          const arr = new Float32Array(count * 3);
+          const layers = 3;
+          const layerHeight = 2.5;
+          const gap = 0.5;
+          
+          for (let i = 0; i < count; i++) {
+            const layer = Math.floor(Math.random() * layers);
+            const yBase = layer * (layerHeight + gap) + 2.3;
+            const y = yBase - 0.1 + (Math.random() * 0.2);
+            const t = layer / (layers - 1);
+            const radius = baseRadius * (1 - t * 0.3) + 0.2;
+            const wobble = 0.2 * Math.sin(8 * t + Math.random());
+            const r = Math.max(0.5, radius + wobble);
+            const a = Math.random() * Math.PI * 2;
+            arr[i*3] = r * Math.cos(a);
+            arr[i*3+1] = y;
+            arr[i*3+2] = r * Math.sin(a);
+          }
+          return arr;
+        }
+
+        function easeInOutCubic(t) {
+          return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        }
+
+        // 装饰球颜色
+        function ornamentColors(index) {
+          const palette = [
+            new THREE.Color(0xff4d6d), // 粉色
+            new THREE.Color(0xffb703), // 黄色
+            new THREE.Color(0x32c3ff), // 蓝色
+            new THREE.Color(0x8ce99a), // 绿色
+            new THREE.Color(0xb197fc), // 紫色
+            new THREE.Color(0xffaad4)  // 浅粉
+          ];
+          return palette[index % palette.length];
+        }
+
+        // 创建粒子系统
+        function createParticleSystem(count, size, colorFn, computeTargets) {
+          const geo = new THREE.BufferGeometry();
+          const pos = new Float32Array(count * 3);
+          const col = new Float32Array(count * 3);
+          const vel = new Float32Array(count * 3);
+          
+          for (let i = 0; i < count; i++) {
+            const ix = i * 3;
+            pos[ix] = (Math.random() - 0.5) * 0.4;
+            pos[ix+1] = (Math.random() - 0.5) * 0.4;
+            pos[ix+2] = (Math.random() - 0.5) * 0.4;
+            
+            vel[ix] = (Math.random() - 0.5) * 0.012;
+            vel[ix+1] = (Math.random() - 0.5) * 0.0072;
+            vel[ix+2] = (Math.random() - 0.5) * 0.012;
+            
+            const c = colorFn(i);
+            col[ix] = c.r;
+            col[ix+1] = c.g;
+            col[ix+2] = c.b;
+          }
+          
+          geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+          geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+          
+          const mat = new THREE.PointsMaterial({
+            size,
+            sizeAttenuation: true,
+            transparent: true,
+            opacity: 0.95,
+            vertexColors: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          });
+          
+          const points = new THREE.Points(geo, mat);
+          points.userData = {
+            targets: computeTargets(count),
+            startPositions: null,
+            velocities: vel
+          };
+          
+          group.add(points);
+          return points;
+        }
+
+        function initThree() {
+          scene = new THREE.Scene();
+          scene.fog = new THREE.FogExp2(0x06101a, 0.035);
+          
+          camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+          camera.position.set(0, 4, 20);
+          
+          renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+          renderer.setSize(window.innerWidth, window.innerHeight);
+          renderer.outputColorSpace = THREE.SRGBColorSpace;
+          containerEl.value.appendChild(renderer.domElement);
+
+          group = new THREE.Group();
+          scene.add(group);
+
+          // 环境光
+          const ambient = new THREE.AmbientLight(0xffffff, 0.35);
+          scene.add(ambient);
+          
+          // 点光源
+          const point = new THREE.PointLight(0xfff3e0, 3.2, 100);
+          point.position.set(4, 6, 6);
+          scene.add(point);
+          
+          // 蛋糕层（叶子）
+          pointsLeaves = createParticleSystem(
+            particleCountLeaves,
+            0.12,
+            (i) => {
+              const colors = [
+                new THREE.Color(0xffecb3), // 浅黄
+                new THREE.Color(0xffccbc), // 浅橙
+                new THREE.Color(0xc5e1a5)  // 浅绿
+              ];
+              return colors[Math.floor(Math.random() * colors.length)];
+            },
+            computeLeafTargets
+          );
+          
+          // 蛋糕装饰（装饰球）
+          pointsOrnaments = createParticleSystem(
+            particleCountOrnaments,
+            0.14,
+            ornamentColors,
+            computeOrnamentTargets
+          );
+          
+          // 蜡烛
+          pointsStar = createParticleSystem(
+            particleCountStar,
+            0.12,
+            () => new THREE.Color(0x7b1fa2), // 紫色蜡烛
+            computeStarTargets
+          );
+          
+          // 糖霜
+          pointsAccents = createParticleSystem(
+            particleCountAccents,
+            0.22,
+            () => new THREE.Color(0xffffff), // 白色糖霜
+            computeAccentsTargets
+          );
+
+          // 雪花效果
+          const snowTex = createSnowflakeTexture();
+          const glowTex = createSnowGlowTexture();
+          snowGroup = new THREE.Group();
+          snowGroup.renderOrder = 0;
+          scene.add(snowGroup);
+          
+          snowSprites = [];
+          snowVel = new Float32Array(snowCount * 2);
+          snowRot = new Float32Array(snowCount);
+          snowScale = new Float32Array(snowCount);
+          snowOpacityPhase = new Float32Array(snowCount);
+          
+          for (let i = 0; i < snowCount; i++) {
+            const mat = new THREE.SpriteMaterial({ 
+              map: snowTex, 
+              color: 0xffffff, 
+              transparent: true, 
+              opacity: 1.0, 
+              depthWrite: false, 
+              depthTest: false, 
+              blending: THREE.AdditiveBlending, 
+              fog: false 
+            });
+            
+            const spr = new THREE.Sprite(mat);
+            const s = (1.6 + Math.random() * 1.6) * (2/3);
+            spr.scale.set(s, s, 1);
+            
+            spr.position.set(
+              (Math.random() - 0.5) * 120,
+              20 + Math.random() * 40,
+              -22 - Math.random() * 12
+            );
+            
+            snowScale[i] = s;
+            snowVel[i*2] = (Math.random() - 0.5) * 0.006;
+            snowVel[i*2+1] = -0.008 - Math.random() * 0.01;
+            snowRot[i] = (-0.004 + Math.random() * 0.008);
+            snowOpacityPhase[i] = Math.random() * Math.PI * 2;
+            snowSprites.push(spr);
+            snowGroup.add(spr);
+            
+            // 雪花光晕
+            const haloMat = new THREE.SpriteMaterial({ 
+              map: glowTex, 
+              color: 0xffffff, 
+              transparent: true, 
+              opacity: 0.6, 
+              depthWrite: false, 
+              depthTest: false, 
+              blending: THREE.AdditiveBlending, 
+              fog: false 
+            });
+            
+            const halo = new THREE.Sprite(haloMat);
+            halo.scale.set(s * 2.6, s * 2.6, 1);
+            halo.position.copy(spr.position);
+            snowGroup.add(halo);
+          }
+          
+          // 设置渲染顺序
+          pointsLeaves.renderOrder = 1;
+          pointsOrnaments.renderOrder = 1;
+          pointsStar.renderOrder = 1;
+          pointsAccents.renderOrder = 1;
+          
+          fitCamera();
+          startTime = performance.now();
+          animate();
+          window.addEventListener('resize', onResize);
+        }
+
+        function animate() {
+          if (!running) return;
+          
+          const now = performance.now();
+          const elapsed = now - startTime;
+          const dt = 16;
+          
+          // 更新雪花
+          for (let i = 0; i < snowCount; i++) {
+            const spr = snowSprites[i];
+            spr.position.x += snowVel[i*2] * dt;
+            spr.position.y += snowVel[i*2+1] * dt;
+            spr.material.rotation += snowRot[i];
+            
+            const f = Math.min(1.0, 0.9 + 0.45 * Math.abs(Math.sin(now * 0.0015 + snowOpacityPhase[i])));
+            spr.material.opacity = 0.67 * f;
+            
+            const halo = snowGroup.children[i*2 + 1];
+            if (halo) {
+              halo.position.copy(spr.position);
+              halo.material.opacity = Math.min(1.0, 0.47 * f);
+            }
+            
+            if (spr.position.y < -30) {
+              spr.position.set(
+                (Math.random() - 0.5) * 120,
+                20 + Math.random() * 40,
+                -22 - Math.random() * 12
+              );
+              spr.material.rotation = Math.random() * Math.PI * 2;
+              if (halo) halo.position.copy(spr.position);
+            }
+          }
+
+          // 更新粒子系统
+          [pointsLeaves, pointsOrnaments, pointsStar, pointsAccents].forEach(points => {
+            const geo = points.geometry;
+            const arr = geo.attributes.position.array;
+            const data = points.userData;
+            const count = arr.length / 3;
+            
+            if (elapsed < disperseDuration) {
+              // 分散阶段
+              for (let i = 0; i < count; i++) {
+                const ix = i * 3;
+                arr[ix] += data.velocities[ix] * dt;
+                arr[ix+1] += data.velocities[ix+1] * dt;
+                arr[ix+2] += data.velocities[ix+2] * dt;
+              }
+            } else {
+              // 变形阶段
+              if (!data.startPositions) {
+                data.startPositions = new Float32Array(arr);
+              }
+              
+              const t = Math.min(1, (elapsed - disperseDuration) / morphDuration);
+              const e = easeInOutCubic(t);
+              
+              for (let i = 0; i < count; i++) {
+                const ix = i * 3;
+                const target = data.targets;
+                arr[ix] = data.startPositions[ix] + (target[ix] - data.startPositions[ix]) * e;
+                arr[ix+1] = data.startPositions[ix+1] + (target[ix+1] - data.startPositions[ix+1]) * e;
+                arr[ix+2] = data.startPositions[ix+2] + (target[ix+2] - data.startPositions[ix+2]) * e;
+              }
+            }
+            
+            geo.attributes.position.needsUpdate = true;
+          });
+
+          group.rotation.y += 0.0032;
+          renderer.render(scene, camera);
+          requestAnimationFrame(animate);
+        }
+
+        function onResize() {
+          camera.aspect = window.innerWidth / window.innerHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(window.innerWidth, window.innerHeight);
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+          fitCamera();
+        }
+
+        function fitCamera() {
+          const aspect = camera.aspect;
+          const vfov = THREE.MathUtils.degToRad(camera.fov);
+          const halfH = (topY - bottomY) * 0.5 * 1.06;
+          const radNeeded = (baseRadius + 1.6) * 1.06;
+          const zH = halfH / Math.tan(vfov / 2);
+          const zW = radNeeded / (Math.tan(vfov / 2) * aspect);
+          const z = Math.max(zH, zW, 20);
+          
+          camera.position.z = z;
+          camera.position.y = (topY + bottomY) * 0.5;
+          camera.lookAt(0, (topY + bottomY) * 0.5, 0);
+        }
+
+        onMounted(() => {
+          const el = document.createElement('div');
+          el.id = 'canvas-container';
+          document.getElementById('app').appendChild(el);
+          containerEl.value = el;
+          initThree();
+          setInterval(spawnBarrage, 1200);
+          document.addEventListener('fullscreenchange', () => { isFs.value = !!document.fullscreenElement; });
+          
+          // 确保音乐播放
+          const bgMusic = document.getElementById('bgMusic');
+          bgMusic.play().catch(e => console.log("自动播放被阻止:", e));
+        });
+
+        return () => h('div', { style: { width: '100%', height: '100%' } }, [
+          h('div', { class: 'barrage' }, barrageItems.value.map(item => 
+            h('div', {
+              key: item.id,
+              class: 'barrage-item',
+              style: {
+                top: item.top,
+                color: item.color,
+                animationDuration: item.duration,
+              }
+            }, item.text)
+          )),
+          h('button', { class: 'fullscreen-btn', onClick: toggleFs }, 
+            isFs.value ? '退出全屏' : '全屏'
+          )
+        ]);
+      }
+    };
+
+    createApp(App).mount('#app');
+  </script>
+</body>
+</html>
